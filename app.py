@@ -1,8 +1,8 @@
 """
-Mile Performance Advantage Dashboard — Streamlit App
+1-Mile Performance Prediction Dashboard — Streamlit App
 
 Computes how much faster an athlete could run for the same metabolic energy
-under different drafting and shoe/product configurations.
+under different drafting and product configurations.
 """
 
 import sys
@@ -23,12 +23,12 @@ from src.config import estimate_frontal_area
 # Page config
 # ══════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="Mile Performance Advantage",
+    page_title="1-Mile Performance Prediction",
     page_icon="🏃",
     layout="wide",
 )
 
-st.title("🏃 Mile Performance Advantage Dashboard")
+st.title("🏃 1-Mile Performance Prediction Dashboard")
 st.markdown("""
 **How to use this tool:**
 1. Set your **baseline even pace** and **athlete parameters** in the sidebar
@@ -39,7 +39,7 @@ st.markdown("""
 The results show how many seconds are saved per 100m segment from drafting and product interventions.
 """)
 
-with st.expander("Model Details & Assumptions"):
+with st.expander("📖 Model Details & Assumptions"):
     st.markdown("""
 **Research basis:**
 - **Aerodynamic drag reduction:** Beaumont et al. (2021) — CFD simulations of in-line running formations. Drag reductions range from ~4% (leader) to ~63% (2nd of 5).
@@ -68,7 +68,7 @@ with col_min:
     pace_min = st.number_input("Minutes", min_value=2, max_value=6, value=3, step=1)
 with col_sec:
     pace_sec = st.number_input("Seconds", min_value=0.00, max_value=59.99,
-                                value=45.00, step=0.01, format="%.2f")
+                                value=49.00, step=0.01, format="%.2f")
 
 st.sidebar.subheader("Athlete")
 height_m = st.sidebar.number_input("Height (m)", min_value=1.50, max_value=2.10,
@@ -77,12 +77,13 @@ mass_kg = st.sidebar.number_input("Mass (kg)", min_value=45.0, max_value=100.0,
                                    value=72.6, step=0.1, format="%.1f")
 
 st.sidebar.subheader("Environment")
-temp_c = st.sidebar.number_input("Temperature (°C)", min_value=-10.0, max_value=45.0,
-                                  value=20.0, step=0.5, format="%.1f")
+temp_f = st.sidebar.number_input("Temperature (°F)", min_value=0.0, max_value=120.0,
+                                  value=75.0, step=1.0, format="%.0f")
+temp_c = (temp_f - 32.0) * 5.0 / 9.0
 rh_pct = st.sidebar.number_input("Relative Humidity (%)", min_value=0.0, max_value=100.0,
-                                  value=50.0, step=1.0, format="%.0f")
+                                  value=52.0, step=1.0, format="%.0f")
 pressure_hpa = st.sidebar.number_input("Barometric Pressure (hPa)", min_value=800.0,
-                                        max_value=1100.0, value=1013.25, step=1.0, format="%.1f")
+                                        max_value=1100.0, value=1015.0, step=1.0, format="%.1f")
 
 air_density = calculate_air_density(temp_c, rh_pct, pressure_hpa)
 st.sidebar.metric("Calculated Air Density", f"{air_density:.4f} kg/m³")
@@ -100,90 +101,107 @@ seg_df = generate_segments(EVENT_DIST, SEG_LEN)
 N_SEG = len(seg_df)
 
 # ══════════════════════════════════════════════════════════════════════
-# Drafting configuration
+# Compute (runs before display so results appear above config)
 # ══════════════════════════════════════════════════════════════════════
-st.subheader("Drafting Configuration")
+# We need to read the configuration first, then show results above it.
+# Use session state for per-segment data.
 
+# ── Drafting toggle ───────────────────────────────────────────────
+st.subheader("Drafting Configuration")
 use_defaults = st.toggle("Use default formation for all drafted segments", value=True)
 
-col_left, col_right = st.columns([1, 2])
-
-# ── Left column: Default formation controls ───────────────────────
-with col_left:
-    st.markdown("**Default Formation**")
-    if use_defaults:
-        formation_options = [
-            "1of1", "1of2", "2of2",
-            "1of3", "2of3", "3of3",
-            "1of4", "2of4", "3of4", "4of4",
-            "1of5", "2of5", "3of5", "4of5", "5of5",
-        ]
-        formation_labels = {
-            "1of1": "Solo (1of1)", "1of2": "Front of pair (1of2)",
-            "2of2": "2nd of 2 (2of2)", "1of3": "Front of 3 (1of3)",
-            "2of3": "2nd of 3 (2of3)", "3of3": "3rd of 3 (3of3)",
-            "1of4": "Front of 4 (1of4)", "2of4": "2nd of 4 (2of4)",
-            "3of4": "3rd of 4 (3of4)", "4of4": "4th of 4 (4of4)",
-            "1of5": "Front of 5 (1of5)", "2of5": "2nd of 5 (2of5)",
-            "3of5": "3rd of 5 (3of5)", "4of5": "4th of 5 (4of5)",
-            "5of5": "5th of 5 (5of5)",
-        }
+# ── Default formation controls ────────────────────────────────────
+if use_defaults:
+    def_col1, def_col2, def_col3 = st.columns(3)
+    formation_options = [
+        "1of1", "1of2", "2of2",
+        "1of3", "2of3", "3of3",
+        "1of4", "2of4", "3of4", "4of4",
+        "1of5", "2of5", "3of5", "4of5", "5of5",
+    ]
+    formation_labels = {
+        "1of1": "Solo (1of1)", "1of2": "Front of pair (1of2)",
+        "2of2": "2nd of 2 (2of2)", "1of3": "Front of 3 (1of3)",
+        "2of3": "2nd of 3 (2of3)", "3of3": "3rd of 3 (3of3)",
+        "1of4": "Front of 4 (1of4)", "2of4": "2nd of 4 (2of4)",
+        "3of4": "3rd of 4 (3of4)", "4of4": "4th of 4 (4of4)",
+        "1of5": "Front of 5 (1of5)", "2of5": "2nd of 5 (2of5)",
+        "3of5": "3rd of 5 (3of5)", "4of5": "4th of 5 (4of5)",
+        "5of5": "5th of 5 (5of5)",
+    }
+    with def_col1:
         default_formation = st.selectbox(
             "Formation", options=formation_options,
             index=formation_options.index("2of5"),
             format_func=lambda x: formation_labels[x],
         )
+    with def_col2:
         default_gap = st.slider("Gap (m)", min_value=0.5, max_value=3.0,
                                  value=1.0, step=0.1, format="%.1f")
+    with def_col3:
         no_draft_final = st.select_slider("Solo final distance (m)",
                                            options=[200.0, 300.0, 400.0], value=400.0)
-    else:
-        st.info("Per-segment configuration is active. Default settings are disabled.")
-        default_formation = "1of1"
-        default_gap = 1.0
-        no_draft_final = 400.0
 
-# ── Right column: Per-segment configuration ───────────────────────
-with col_right:
-    st.markdown("**Per-Segment Configuration**")
-    if use_defaults:
-        st.info("Switch toggle to 'OFF' to configure each segment individually.")
-    else:
-        st.markdown("Set position, group size, and gap for each segment. "
-                    "Unfilled segments default to Solo (1of1).")
+    # Build plan from defaults
+    plan = build_drafting_plan(
+        n_segments=N_SEG,
+        zone_config={"formation": default_formation, "gap_m": default_gap},
+        event_distance_m=EVENT_DIST,
+        segment_length_m=SEG_LEN,
+        no_draft_final_m=no_draft_final,
+    )
+else:
+    default_formation = "2of5"
+    default_gap = 1.0
+    no_draft_final = 400.0
 
-    # Build segment table data
+    # ── Per-segment configuration in scrollable container ─────────
+    st.markdown("**Per-Segment Configuration**  *(Set position, group size, and gap for each segment)*")
+
+    # Reset to defaults button
+    if st.button("🔄 Reset all segments to default (Position 2 of 5 at 1.0m)"):
+        for i in range(N_SEG):
+            st.session_state[f"pos_{i}"] = 2
+            st.session_state[f"grp_{i}"] = 5
+            st.session_state[f"gap_{i}"] = 1.0
+        st.rerun()
+
     seg_config_data = []
     has_error = False
 
-    if not use_defaults:
-        # Create a styled table with inputs
-        cols_header = st.columns([0.8, 1.2, 1.2, 1.2, 1])
+    # Scrollable container for per-segment inputs
+    with st.container(height=400):
+        cols_header = st.columns([0.6, 1.5, 1, 1, 1, 0.8])
         cols_header[0].markdown("**Seg**")
-        cols_header[1].markdown("**Position**")
-        cols_header[2].markdown("**Group Size**")
-        cols_header[3].markdown("**Gap (m)**")
-        cols_header[4].markdown("**Type**")
+        cols_header[1].markdown("**Distance**")
+        cols_header[2].markdown("**Position**")
+        cols_header[3].markdown("**Group Size**")
+        cols_header[4].markdown("**Gap (m)**")
+        cols_header[5].markdown("**Type**")
 
         for i in range(N_SEG):
             is_bend = seg_df.loc[i, "is_bend"]
-            seg_type = "🟦 Bend" if is_bend else "⬜ Straight"
+            seg_type = "🟦 Curve" if is_bend else "⬜ Straight"
             bg_color = "#e3f2fd" if is_bend else "#ffffff"
+            start_m = int(seg_df.loc[i, "start_m"])
+            end_m = int(seg_df.loc[i, "end_m"])
 
-            cols = st.columns([0.8, 1.2, 1.2, 1.2, 1])
-            cols[0].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;'>"
+            cols = st.columns([0.6, 1.5, 1, 1, 1, 0.8])
+            cols[0].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;text-align:center;'>"
                            f"<b>{i+1}</b></div>", unsafe_allow_html=True)
+            cols[1].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;'>"
+                           f"{start_m}–{end_m} m</div>", unsafe_allow_html=True)
 
-            pos = cols[1].number_input(f"Pos##{i}", min_value=0, max_value=5,
+            pos = cols[2].number_input(f"Pos##{i}", min_value=0, max_value=5,
                                         value=0, step=1, key=f"pos_{i}",
                                         label_visibility="collapsed")
-            group = cols[2].number_input(f"Grp##{i}", min_value=0, max_value=5,
+            group = cols[3].number_input(f"Grp##{i}", min_value=0, max_value=5,
                                           value=0, step=1, key=f"grp_{i}",
                                           label_visibility="collapsed")
-            gap = cols[3].number_input(f"Gap##{i}", min_value=0.0, max_value=4.0,
+            gap = cols[4].number_input(f"Gap##{i}", min_value=0.0, max_value=4.0,
                                        value=0.0, step=0.1, format="%.1f",
                                        key=f"gap_{i}", label_visibility="collapsed")
-            cols[4].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;'>"
+            cols[5].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;'>"
                            f"{seg_type}</div>", unsafe_allow_html=True)
 
             # Validate
@@ -208,25 +226,10 @@ with col_right:
                     "gap_m": 0.0,
                 })
 
-# ══════════════════════════════════════════════════════════════════════
-# Compute
-# ══════════════════════════════════════════════════════════════════════
-if has_error:
-    st.error("Please fix the errors above before results can be computed.")
-    st.stop()
+    if has_error:
+        st.error("Please fix the errors above before results can be computed.")
+        st.stop()
 
-pace_seconds = pace_min * 60 + pace_sec
-baseline_speed = EVENT_DIST / pace_seconds
-
-if use_defaults:
-    plan = build_drafting_plan(
-        n_segments=N_SEG,
-        zone_config={"formation": default_formation, "gap_m": default_gap},
-        event_distance_m=EVENT_DIST,
-        segment_length_m=SEG_LEN,
-        no_draft_final_m=no_draft_final,
-    )
-else:
     # Build plan from per-segment data
     plan_rows = []
     for sd in seg_config_data:
@@ -236,6 +239,12 @@ else:
             "is_curve_offset": 0,
         })
     plan = pd.DataFrame(plan_rows)
+
+# ══════════════════════════════════════════════════════════════════════
+# Compute results
+# ══════════════════════════════════════════════════════════════════════
+pace_seconds = pace_min * 60 + pace_sec
+baseline_speed = EVENT_DIST / pace_seconds
 
 result = compute_segment_savings(
     baseline_speed_ms=baseline_speed,
@@ -249,9 +258,10 @@ result = compute_segment_savings(
 )
 
 # ══════════════════════════════════════════════════════════════════════
-# Results
+# Results (ABOVE the plots)
 # ══════════════════════════════════════════════════════════════════════
 st.markdown("---")
+st.subheader("📊 Performance Prediction")
 
 eq_time = result["equivalent_finish_s"]
 saved = result["time_saved_s"]
@@ -259,7 +269,6 @@ pct = result["pct_improvement"]
 draft_s = result["drafting_contribution_s"]
 shoe_s = result["shoe_contribution_s"]
 
-# Big metrics
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Baseline", format_time(pace_seconds))
 col2.metric("Equivalent Time", format_time(eq_time))
@@ -285,14 +294,13 @@ with plot_col1:
     x = df["end_m"]
     width = df["length_m"] * 0.75
 
-    # Negative values (time saved = bars below zero)
     draft_neg = -df["drafting_saved_s"]
     shoe_neg = -df["shoe_saved_s"]
 
     ax1.bar(x, draft_neg, width=width, color="#2ecc71", alpha=0.85, label="Drafting")
     ax1.bar(x, shoe_neg, width=width, bottom=draft_neg, color="#3498db", alpha=0.85, label="Product RE")
 
-    # Shade bend segments
+    # Shade solo segments
     for _, row in df.iterrows():
         if row["pos_of_n"] == "1of1":
             ax1.axvspan(row["start_m"], row["end_m"], color="lightgrey", alpha=0.15, zorder=0)
@@ -303,9 +311,12 @@ with plot_col1:
     ax1.set_title("Time Saved Per Segment (vs Baseline)")
     ax1.legend(loc="lower right", fontsize=9)
 
-    # Dynamic y-axis with padding
+    # Dynamic y-axis
     y_min = (draft_neg + shoe_neg).min()
-    ax1.set_ylim(y_min * 1.3, max(0.05, -y_min * 0.1))
+    if y_min < 0:
+        ax1.set_ylim(y_min * 1.25, max(0.02, -y_min * 0.08))
+    else:
+        ax1.set_ylim(-0.05, 0.02)
     ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f}"))
 
     plt.tight_layout()
@@ -323,10 +334,11 @@ with plot_col2:
     ax2.plot(x, df["equivalent_speed_ms"], "o-", color="#9b59b6", lw=2,
              markersize=5, label="Equivalent speed")
 
-    # Shade bend segments
-    for _, row in df.iterrows():
-        if seg_df.loc[seg_df["end_m"] == row["end_m"], "is_bend"].iloc[0] if len(seg_df.loc[seg_df["end_m"] == row["end_m"]]) > 0 else False:
-            ax2.axvspan(row["start_m"], row["end_m"], color="lightblue", alpha=0.15, zorder=0)
+    # Shade curve segments
+    for i_seg in range(N_SEG):
+        if seg_df.loc[i_seg, "is_bend"]:
+            ax2.axvspan(seg_df.loc[i_seg, "start_m"], seg_df.loc[i_seg, "end_m"],
+                       color="lightblue", alpha=0.15, zorder=0)
 
     ax2.set_xlabel("Distance (m)")
     ax2.set_ylabel("Speed (m/s)")
@@ -334,7 +346,6 @@ with plot_col2:
     ax2.legend(loc="upper right", fontsize=9)
 
     # Dynamic y-axis
-    v_min = df["equivalent_speed_ms"].min()
     v_max = df["equivalent_speed_ms"].max()
     padding = max(0.02, (v_max - baseline_v) * 0.3)
     ax2.set_ylim(baseline_v - padding, v_max + padding)
@@ -344,7 +355,7 @@ with plot_col2:
     plt.close(fig2)
 
 # ══════════════════════════════════════════════════════════════════════
-# Data table
+# Data table (expandable, at bottom)
 # ══════════════════════════════════════════════════════════════════════
 with st.expander("View per-segment data table"):
     display_df = result["segments_df"][[
@@ -352,7 +363,7 @@ with st.expander("View per-segment data table"):
         "r_drag", "baseline_speed_ms", "equivalent_speed_ms",
         "time_saved_s", "drafting_saved_s", "shoe_saved_s", "re_improvement_pct",
     ]].round(4)
-    st.dataframe(display_df, use_container_width=True)
+    st.dataframe(display_df, width="stretch")
 
 # ══════════════════════════════════════════════════════════════════════
 # Footer
