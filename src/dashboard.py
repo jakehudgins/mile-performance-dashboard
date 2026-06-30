@@ -281,3 +281,39 @@ def format_time(seconds: float) -> str:
     mins = int(seconds // 60)
     secs = seconds - mins * 60
     return f"{mins}:{secs:05.2f}"
+
+
+def calculate_air_density(temp_c: float, rh_pct: float, pressure_hpa: float) -> float:
+    """Calculate air density from temperature, relative humidity, and pressure.
+
+    Uses the ideal gas law with humidity correction:
+        rho = (p_d / (R_d * T)) + (p_v / (R_v * T))
+
+    where p_v is vapor pressure from the Magnus formula.
+
+    Parameters
+    ----------
+    temp_c : float
+        Temperature in degrees Celsius.
+    rh_pct : float
+        Relative humidity in percent (0-100).
+    pressure_hpa : float
+        Barometric pressure in hectopascals (hPa / mbar).
+
+    Returns
+    -------
+    float : Air density in kg/m³.
+    """
+    T = temp_c + 273.15  # Kelvin
+    p = pressure_hpa * 100.0  # Pa
+
+    # Saturation vapor pressure (Magnus formula)
+    p_sat = 611.2 * np.exp((17.67 * temp_c) / (temp_c + 243.5))  # Pa
+    p_v = (rh_pct / 100.0) * p_sat  # Actual vapor pressure
+    p_d = p - p_v  # Dry air partial pressure
+
+    R_d = 287.058  # J/(kg·K) specific gas constant for dry air
+    R_v = 461.495  # J/(kg·K) specific gas constant for water vapor
+
+    rho = (p_d / (R_d * T)) + (p_v / (R_v * T))
+    return rho

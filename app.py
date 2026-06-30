@@ -2,10 +2,7 @@
 Mile Performance Advantage Dashboard — Streamlit App
 
 Computes how much faster an athlete could run for the same metabolic energy
-under different drafting and shoe configurations.
-
-Based on: Beaumont et al. (2021), Schickhofer & Hanson (2021), Kipp et al. (2019),
-Batliner et al. (2018), Pugh (1971).
+under different drafting and shoe/product configurations.
 """
 
 import sys
@@ -18,8 +15,7 @@ import matplotlib.pyplot as plt
 # Add current directory so we can import src modules
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.dashboard import compute_segment_savings, build_drafting_plan, format_time
-from src.plotting import plot_dashboard_savings
+from src.dashboard import compute_segment_savings, build_drafting_plan, format_time, calculate_air_density
 from src.segments import generate_segments
 from src.config import estimate_frontal_area
 
@@ -34,13 +30,35 @@ st.set_page_config(
 
 st.title("🏃 Mile Performance Advantage Dashboard")
 st.markdown("""
-Given a **baseline even pace**, this tool computes how much faster the athlete
-could run for the **same metabolic energy** under different drafting and shoe
-configurations.
+**How to use this tool:**
+1. Set your **baseline even pace** and **athlete parameters** in the sidebar
+2. Choose whether to use a **default drafting formation** or configure **each segment individually**
+3. Adjust **Product RE %** for shoe/apparel aerodynamic benefits
+4. The model instantly computes the equivalent faster finish time at the same metabolic cost
+
+The results show how many seconds are saved per 100m segment from drafting and product interventions.
 """)
 
+with st.expander("Model Details & Assumptions"):
+    st.markdown("""
+**Research basis:**
+- **Aerodynamic drag reduction:** Beaumont et al. (2021) — CFD simulations of in-line running formations. Drag reductions range from ~4% (leader) to ~63% (2nd of 5).
+- **Gap sensitivity:** Schickhofer & Hanson (2021) — benefit decays linearly to near-zero at 4.0 m gap.
+- **Intrinsic metabolic cost:** Batliner et al. (2018) — quadratic VO₂–velocity relationship from treadmill data.
+- **Air resistance cost:** Pugh (1971) — cubic relationship between speed and oxygen cost of overcoming drag.
+- **Speed conversion:** Kipp et al. (2019) — curvilinear VO₂–velocity model to invert savings into equivalent faster speed.
+
+**Key assumptions:**
+- Drafting benefits are from steady-state CFD in still air — crosswinds/gusts will alter actual benefit.
+- Gap between runners is assumed constant within each 100m segment.
+- Product RE improvement applies to the intrinsic (musculoskeletal) cost only, not air resistance.
+- Frontal area is estimated from height and mass (DuBois BSA × 0.18).
+- The interaction between drafting and product benefits is nonlinear and correctly modeled via root-finding.
+- Group sizes are limited to 1–5 runners per the validated CFD data. Positions must be ≤ group size.
+    """)
+
 # ══════════════════════════════════════════════════════════════════════
-# Sidebar: Global settings
+# Sidebar: Settings
 # ══════════════════════════════════════════════════════════════════════
 st.sidebar.header("⚙️ Settings")
 
@@ -57,118 +75,174 @@ height_m = st.sidebar.number_input("Height (m)", min_value=1.50, max_value=2.10,
                                     value=1.84, step=0.01, format="%.2f")
 mass_kg = st.sidebar.number_input("Mass (kg)", min_value=45.0, max_value=100.0,
                                    value=72.6, step=0.1, format="%.1f")
-air_density = st.sidebar.number_input("Air density (kg/m³)", min_value=0.90, max_value=1.35,
-                                       value=1.225, step=0.005, format="%.3f")
 
-st.sidebar.subheader("Shoe / Product")
-shoe_re_pct = st.sidebar.slider("Shoe RE improvement (%)", min_value=0.0,
-                                 max_value=6.0, value=0.0, step=0.1, format="%.1f")
+st.sidebar.subheader("Environment")
+temp_c = st.sidebar.number_input("Temperature (°C)", min_value=-10.0, max_value=45.0,
+                                  value=20.0, step=0.5, format="%.1f")
+rh_pct = st.sidebar.number_input("Relative Humidity (%)", min_value=0.0, max_value=100.0,
+                                  value=50.0, step=1.0, format="%.0f")
+pressure_hpa = st.sidebar.number_input("Barometric Pressure (hPa)", min_value=800.0,
+                                        max_value=1100.0, value=1013.25, step=1.0, format="%.1f")
 
-st.sidebar.subheader("Drafting — Zone Default")
-formation_options = [
-    "1of1", "1of2", "2of2",
-    "1of3", "2of3", "3of3",
-    "1of4", "2of4", "3of4", "4of4",
-    "1of5", "2of5", "3of5", "4of5", "5of5",
-]
-formation_labels = {
-    "1of1": "Solo (1of1)",
-    "1of2": "Front of pair (1of2)",
-    "2of2": "2nd of 2 (2of2)",
-    "1of3": "Front of 3 (1of3)",
-    "2of3": "2nd of 3 (2of3)",
-    "3of3": "3rd of 3 (3of3)",
-    "1of4": "Front of 4 (1of4)",
-    "2of4": "2nd of 4 (2of4)",
-    "3of4": "3rd of 4 (3of4)",
-    "4of4": "4th of 4 (4of4)",
-    "1of5": "Front of 5 (1of5)",
-    "2of5": "2nd of 5 (2of5)",
-    "3of5": "3rd of 5 (3of5)",
-    "4of5": "4th of 5 (4of5)",
-    "5of5": "5th of 5 (5of5)",
-}
+air_density = calculate_air_density(temp_c, rh_pct, pressure_hpa)
+st.sidebar.metric("Calculated Air Density", f"{air_density:.4f} kg/m³")
 
-default_formation = st.sidebar.selectbox(
-    "Default formation",
-    options=formation_options,
-    index=formation_options.index("2of5"),
-    format_func=lambda x: formation_labels[x],
-)
-default_gap = st.sidebar.slider("Default gap (m)", min_value=0.5, max_value=3.0,
-                                 value=1.0, step=0.1, format="%.1f")
-no_draft_final = st.sidebar.select_slider("Solo final distance (m)",
-                                           options=[200.0, 300.0, 400.0], value=400.0)
+st.sidebar.subheader("Product")
+product_re_pct = st.sidebar.slider("Product RE Improvement (%)", min_value=0.0,
+                                    max_value=6.0, value=0.0, step=0.1, format="%.1f")
 
 # ══════════════════════════════════════════════════════════════════════
 # Race geometry
 # ══════════════════════════════════════════════════════════════════════
-EVENT_DIST = 1609.34  # mile
+EVENT_DIST = 1609.34
 SEG_LEN = 100.0
 seg_df = generate_segments(EVENT_DIST, SEG_LEN)
 N_SEG = len(seg_df)
 
 # ══════════════════════════════════════════════════════════════════════
-# Per-segment configuration
+# Drafting configuration
 # ══════════════════════════════════════════════════════════════════════
-st.subheader("📋 Per-Segment Drafting Configuration")
-st.markdown("Customize position and gap for each segment. Leave as 'Zone default' to use sidebar settings.")
+st.subheader("Drafting Configuration")
 
-with st.expander("Click to expand per-segment controls", expanded=False):
-    seg_data = []
-    cols = st.columns(4)
-    for i in range(N_SEG):
-        col = cols[i % 4]
-        with col:
-            st.markdown(f"**Seg {i+1}** ({seg_df.loc[i, 'start_m']:.0f}–{seg_df.loc[i, 'end_m']:.0f} m)")
-            pos = st.selectbox(
-                f"Position##seg{i}",
-                options=["default"] + formation_options,
-                index=0,
-                format_func=lambda x: "Zone default" if x == "default" else formation_labels.get(x, x),
-                key=f"pos_{i}",
-                label_visibility="collapsed",
-            )
-            gap = st.number_input(
-                f"Gap##seg{i}",
-                min_value=0.0, max_value=4.0, value=0.0, step=0.1,
-                format="%.1f", key=f"gap_{i}",
-                label_visibility="collapsed",
-            )
-            seg_data.append({"pos": pos, "gap": gap})
+use_defaults = st.toggle("Use default formation for all drafted segments", value=True)
+
+col_left, col_right = st.columns([1, 2])
+
+# ── Left column: Default formation controls ───────────────────────
+with col_left:
+    st.markdown("**Default Formation**")
+    if use_defaults:
+        formation_options = [
+            "1of1", "1of2", "2of2",
+            "1of3", "2of3", "3of3",
+            "1of4", "2of4", "3of4", "4of4",
+            "1of5", "2of5", "3of5", "4of5", "5of5",
+        ]
+        formation_labels = {
+            "1of1": "Solo (1of1)", "1of2": "Front of pair (1of2)",
+            "2of2": "2nd of 2 (2of2)", "1of3": "Front of 3 (1of3)",
+            "2of3": "2nd of 3 (2of3)", "3of3": "3rd of 3 (3of3)",
+            "1of4": "Front of 4 (1of4)", "2of4": "2nd of 4 (2of4)",
+            "3of4": "3rd of 4 (3of4)", "4of4": "4th of 4 (4of4)",
+            "1of5": "Front of 5 (1of5)", "2of5": "2nd of 5 (2of5)",
+            "3of5": "3rd of 5 (3of5)", "4of5": "4th of 5 (4of5)",
+            "5of5": "5th of 5 (5of5)",
+        }
+        default_formation = st.selectbox(
+            "Formation", options=formation_options,
+            index=formation_options.index("2of5"),
+            format_func=lambda x: formation_labels[x],
+        )
+        default_gap = st.slider("Gap (m)", min_value=0.5, max_value=3.0,
+                                 value=1.0, step=0.1, format="%.1f")
+        no_draft_final = st.select_slider("Solo final distance (m)",
+                                           options=[200.0, 300.0, 400.0], value=400.0)
+    else:
+        st.info("Per-segment configuration is active. Default settings are disabled.")
+        default_formation = "1of1"
+        default_gap = 1.0
+        no_draft_final = 400.0
+
+# ── Right column: Per-segment configuration ───────────────────────
+with col_right:
+    st.markdown("**Per-Segment Configuration**")
+    if use_defaults:
+        st.info("Switch toggle to 'OFF' to configure each segment individually.")
+    else:
+        st.markdown("Set position, group size, and gap for each segment. "
+                    "Unfilled segments default to Solo (1of1).")
+
+    # Build segment table data
+    seg_config_data = []
+    has_error = False
+
+    if not use_defaults:
+        # Create a styled table with inputs
+        cols_header = st.columns([0.8, 1.2, 1.2, 1.2, 1])
+        cols_header[0].markdown("**Seg**")
+        cols_header[1].markdown("**Position**")
+        cols_header[2].markdown("**Group Size**")
+        cols_header[3].markdown("**Gap (m)**")
+        cols_header[4].markdown("**Type**")
+
+        for i in range(N_SEG):
+            is_bend = seg_df.loc[i, "is_bend"]
+            seg_type = "🟦 Bend" if is_bend else "⬜ Straight"
+            bg_color = "#e3f2fd" if is_bend else "#ffffff"
+
+            cols = st.columns([0.8, 1.2, 1.2, 1.2, 1])
+            cols[0].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;'>"
+                           f"<b>{i+1}</b></div>", unsafe_allow_html=True)
+
+            pos = cols[1].number_input(f"Pos##{i}", min_value=0, max_value=5,
+                                        value=0, step=1, key=f"pos_{i}",
+                                        label_visibility="collapsed")
+            group = cols[2].number_input(f"Grp##{i}", min_value=0, max_value=5,
+                                          value=0, step=1, key=f"grp_{i}",
+                                          label_visibility="collapsed")
+            gap = cols[3].number_input(f"Gap##{i}", min_value=0.0, max_value=4.0,
+                                       value=0.0, step=0.1, format="%.1f",
+                                       key=f"gap_{i}", label_visibility="collapsed")
+            cols[4].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;'>"
+                           f"{seg_type}</div>", unsafe_allow_html=True)
+
+            # Validate
+            if pos > 0 and group > 0:
+                if pos > group:
+                    st.error(f"Segment {i+1}: Position ({pos}) cannot exceed group size ({group}).")
+                    has_error = True
+                elif group < 1 or group > 5 or pos < 1 or pos > 5:
+                    st.error(f"Segment {i+1}: Position and group size must be whole numbers 1–5.")
+                    has_error = True
+                else:
+                    seg_config_data.append({
+                        "idx": i,
+                        "pos_of_n": f"{pos}of{group}",
+                        "gap_m": gap if gap > 0 else 1.0,
+                    })
+            else:
+                # Unfilled = solo
+                seg_config_data.append({
+                    "idx": i,
+                    "pos_of_n": "1of1",
+                    "gap_m": 0.0,
+                })
 
 # ══════════════════════════════════════════════════════════════════════
 # Compute
 # ══════════════════════════════════════════════════════════════════════
+if has_error:
+    st.error("Please fix the errors above before results can be computed.")
+    st.stop()
+
 pace_seconds = pace_min * 60 + pace_sec
 baseline_speed = EVENT_DIST / pace_seconds
 
-# Build overrides from per-segment controls
-overrides = {}
-for i, sd in enumerate(seg_data):
-    override = {}
-    if sd["pos"] != "default":
-        override["pos_of_n"] = sd["pos"]
-    if sd["gap"] > 0:
-        override["gap_m"] = sd["gap"]
-    if override:
-        overrides[i] = override
-
-plan = build_drafting_plan(
-    n_segments=N_SEG,
-    zone_config={"formation": default_formation, "gap_m": default_gap},
-    per_segment_overrides=overrides,
-    event_distance_m=EVENT_DIST,
-    segment_length_m=SEG_LEN,
-    no_draft_final_m=no_draft_final,
-)
+if use_defaults:
+    plan = build_drafting_plan(
+        n_segments=N_SEG,
+        zone_config={"formation": default_formation, "gap_m": default_gap},
+        event_distance_m=EVENT_DIST,
+        segment_length_m=SEG_LEN,
+        no_draft_final_m=no_draft_final,
+    )
+else:
+    # Build plan from per-segment data
+    plan_rows = []
+    for sd in seg_config_data:
+        plan_rows.append({
+            "pos_of_n": sd["pos_of_n"],
+            "gap_m": sd["gap_m"],
+            "is_curve_offset": 0,
+        })
+    plan = pd.DataFrame(plan_rows)
 
 result = compute_segment_savings(
     baseline_speed_ms=baseline_speed,
     event_distance_m=EVENT_DIST,
     segment_length_m=SEG_LEN,
     drafting_plan=plan,
-    shoe_re_pct=shoe_re_pct,
+    shoe_re_pct=product_re_pct,
     air_density=air_density,
     height_m=height_m,
     mass_kg=mass_kg,
@@ -194,27 +268,87 @@ col4.metric("Improvement", f"{pct:.2f} %")
 
 col5, col6 = st.columns(2)
 col5.metric("↳ Drafting", f"{draft_s:.2f} s")
-col6.metric("↳ Shoes/Product", f"{shoe_s:.2f} s")
+col6.metric("↳ Product RE", f"{shoe_s:.2f} s")
 
 # ══════════════════════════════════════════════════════════════════════
-# Visualization
+# Plots (side by side)
 # ══════════════════════════════════════════════════════════════════════
 st.markdown("---")
-st.subheader("📊 Per-Segment Breakdown")
 
-fig = plot_dashboard_savings(
-    result,
-    title=f"Performance Advantage: {format_time(pace_seconds)} → {format_time(eq_time)} ({saved:+.2f}s)",
-)
-st.pyplot(fig)
-plt.close(fig)
+df = result["segments_df"]
+plot_col1, plot_col2 = st.columns(2)
+
+# ── Left plot: Time saved per segment (bars pointing DOWN) ────────
+with plot_col1:
+    fig1, ax1 = plt.subplots(figsize=(7, 4.5))
+
+    x = df["end_m"]
+    width = df["length_m"] * 0.75
+
+    # Negative values (time saved = bars below zero)
+    draft_neg = -df["drafting_saved_s"]
+    shoe_neg = -df["shoe_saved_s"]
+
+    ax1.bar(x, draft_neg, width=width, color="#2ecc71", alpha=0.85, label="Drafting")
+    ax1.bar(x, shoe_neg, width=width, bottom=draft_neg, color="#3498db", alpha=0.85, label="Product RE")
+
+    # Shade bend segments
+    for _, row in df.iterrows():
+        if row["pos_of_n"] == "1of1":
+            ax1.axvspan(row["start_m"], row["end_m"], color="lightgrey", alpha=0.15, zorder=0)
+
+    ax1.axhline(0, color="black", lw=0.8)
+    ax1.set_xlabel("Distance (m)")
+    ax1.set_ylabel("Time Saved (s)")
+    ax1.set_title("Time Saved Per Segment (vs Baseline)")
+    ax1.legend(loc="lower right", fontsize=9)
+
+    # Dynamic y-axis with padding
+    y_min = (draft_neg + shoe_neg).min()
+    ax1.set_ylim(y_min * 1.3, max(0.05, -y_min * 0.1))
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f}"))
+
+    plt.tight_layout()
+    st.pyplot(fig1)
+    plt.close(fig1)
+
+# ── Right plot: Speed comparison line plot ────────────────────────
+with plot_col2:
+    fig2, ax2 = plt.subplots(figsize=(7, 4.5))
+
+    x = df["end_m"]
+    baseline_v = df["baseline_speed_ms"].iloc[0]
+
+    ax2.axhline(baseline_v, color="black", ls="--", lw=2, label=f"Baseline ({baseline_v:.3f} m/s)")
+    ax2.plot(x, df["equivalent_speed_ms"], "o-", color="#9b59b6", lw=2,
+             markersize=5, label="Equivalent speed")
+
+    # Shade bend segments
+    for _, row in df.iterrows():
+        if seg_df.loc[seg_df["end_m"] == row["end_m"], "is_bend"].iloc[0] if len(seg_df.loc[seg_df["end_m"] == row["end_m"]]) > 0 else False:
+            ax2.axvspan(row["start_m"], row["end_m"], color="lightblue", alpha=0.15, zorder=0)
+
+    ax2.set_xlabel("Distance (m)")
+    ax2.set_ylabel("Speed (m/s)")
+    ax2.set_title("Equivalent Speed at Same Metabolic Cost")
+    ax2.legend(loc="upper right", fontsize=9)
+
+    # Dynamic y-axis
+    v_min = df["equivalent_speed_ms"].min()
+    v_max = df["equivalent_speed_ms"].max()
+    padding = max(0.02, (v_max - baseline_v) * 0.3)
+    ax2.set_ylim(baseline_v - padding, v_max + padding)
+
+    plt.tight_layout()
+    st.pyplot(fig2)
+    plt.close(fig2)
 
 # ══════════════════════════════════════════════════════════════════════
-# Segment table
+# Data table
 # ══════════════════════════════════════════════════════════════════════
 with st.expander("View per-segment data table"):
     display_df = result["segments_df"][[
-        "segment_idx", "start_m", "end_m", "pos_of_n", "gap_m",
+        "segment_idx", "start_m", "end_m", "is_bend", "pos_of_n", "gap_m",
         "r_drag", "baseline_speed_ms", "equivalent_speed_ms",
         "time_saved_s", "drafting_saved_s", "shoe_saved_s", "re_improvement_pct",
     ]].round(4)
@@ -225,7 +359,7 @@ with st.expander("View per-segment data table"):
 # ══════════════════════════════════════════════════════════════════════
 st.markdown("---")
 st.caption("""
-**Model references:** Beaumont et al. (2021) — CFD drag reduction;
+**References:** Beaumont et al. (2021) — CFD drag reduction;
 Schickhofer & Hanson (2021) — gap sensitivity;
 Kipp et al. (2019) & Batliner et al. (2018) — VO₂–velocity;
 Pugh (1971) — metabolic cost of air resistance.
