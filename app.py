@@ -169,40 +169,31 @@ else:
     seg_config_data = []
     has_error = False
 
-    # Scrollable container for per-segment inputs
-    with st.container(height=400):
-        cols_header = st.columns([0.6, 1.5, 1, 1, 1, 0.8])
-        cols_header[0].markdown("**Seg**")
-        cols_header[1].markdown("**Distance**")
-        cols_header[2].markdown("**Position**")
-        cols_header[3].markdown("**Group Size**")
-        cols_header[4].markdown("**Gap (m)**")
-        cols_header[5].markdown("**Type**")
-
+    # Scrollable container for per-segment inputs (mobile-friendly)
+    with st.container(height=450):
         for i in range(N_SEG):
             is_bend = seg_df.loc[i, "is_bend"]
             seg_type = "🟦 Curve" if is_bend else "⬜ Straight"
-            bg_color = "#e3f2fd" if is_bend else "#ffffff"
+            bg_color = "#e3f2fd" if is_bend else "#f8f8f8"
             start_m = int(seg_df.loc[i, "start_m"])
             end_m = int(seg_df.loc[i, "end_m"])
 
-            cols = st.columns([0.6, 1.5, 1, 1, 1, 0.8])
-            cols[0].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;text-align:center;'>"
-                           f"<b>{i+1}</b></div>", unsafe_allow_html=True)
-            cols[1].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;'>"
-                           f"{start_m}–{end_m} m</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='background:{bg_color};padding:6px 10px;border-radius:6px;"
+                f"margin-bottom:2px;font-size:14px;'>"
+                f"<b>Seg {i+1}</b> &nbsp; {start_m}–{end_m} m &nbsp; {seg_type}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
-            pos = cols[2].number_input(f"Pos##{i}", min_value=0, max_value=5,
-                                        value=0, step=1, key=f"pos_{i}",
-                                        label_visibility="collapsed")
-            group = cols[3].number_input(f"Grp##{i}", min_value=0, max_value=5,
-                                          value=0, step=1, key=f"grp_{i}",
-                                          label_visibility="collapsed")
-            gap = cols[4].number_input(f"Gap##{i}", min_value=0.0, max_value=4.0,
-                                       value=0.0, step=0.1, format="%.1f",
-                                       key=f"gap_{i}", label_visibility="collapsed")
-            cols[5].markdown(f"<div style='background:{bg_color};padding:4px;border-radius:4px;'>"
-                           f"{seg_type}</div>", unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
+            pos = c1.number_input("Position", min_value=0, max_value=5,
+                                   value=0, step=1, key=f"pos_{i}")
+            group = c2.number_input("Group size", min_value=0, max_value=5,
+                                     value=0, step=1, key=f"grp_{i}")
+            gap = c3.number_input("Gap (m)", min_value=0.0, max_value=4.0,
+                                   value=0.0, step=0.1, format="%.1f",
+                                   key=f"gap_{i}")
 
             # Validate
             if pos > 0 and group > 0:
